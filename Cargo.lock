@@ -25,6 +25,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "alsa-volsync"
+version = "0.1.0"
+dependencies = [
+ "alsa",
+ "itertools",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -73,19 +81,3 @@ name = "pkg-config"
 version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ac9a59f73473f1b8d852421e59e64809f025994837ef743615c6d0c5b305160"
-
-[[package]]
-name = "volsync"
-version = "0.1.0"
-dependencies = [
- "alsa",
- "itertools",
-]
-
-[[patch.unused]]
-name = "endian_codec"
-version = "0.1.2"
-
-[[patch.unused]]
-name = "endian_codec_derive"
-version = "0.1.2"

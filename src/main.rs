@@ -1,11 +1,17 @@
-use std::collections::HashMap;
 use alsa::mixer::MilliBel;
 use itertools::{Either, Itertools};
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MixerDirection {
     Playback,
     Capture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MixerVolumeMapper {
+    Auto,
+    Linear,
 }
 
 struct MixerControl<'a> {
@@ -15,6 +21,8 @@ struct MixerControl<'a> {
     db_range: (MilliBel, MilliBel),
     raw_range: (i64, i64),
     last_volume: Option<i64>,
+    scale: f64,
+    volume_mapper: MixerVolumeMapper,
 }
 
 impl<'a> MixerControl<'a> {
@@ -28,9 +36,13 @@ impl<'a> MixerControl<'a> {
         index: u32,
         dir: MixerDirection,
         monitor: bool,
+        scale: f64,
+        volume_mapper: MixerVolumeMapper,
     ) -> Self {
         let id = alsa::mixer::SelemId::new(name, index);
-        let selem = mixer.find_selem(&id).unwrap();
+        let selem = mixer
+            .find_selem(&id)
+            .expect(&format!("unable to find selem \"{}\",{}", name, index));
 
         let db_range = match dir {
             MixerDirection::Playback => selem.get_playback_db_range(),
@@ -48,6 +60,8 @@ impl<'a> MixerControl<'a> {
             monitor,
             db_range,
             raw_range,
+            scale,
+            volume_mapper,
             last_volume: None,
         }
     }
@@ -86,37 +100,40 @@ impl<'a> MixerControl<'a> {
         let (db_min, db_max) = self.db_range;
         let (raw_min, raw_max) = self.raw_range;
 
-        if db_min >= db_max {
+        let mut norm_vol: f64 = 0.0;
+
+        if db_min >= db_max || self.volume_mapper == MixerVolumeMapper::Linear {
             if raw_min == raw_max {
                 return None;
             }
 
-            return Some(((raw_vol - raw_min) as f64) / ((raw_max - raw_min) as f64));
+            norm_vol = ((raw_vol - raw_min) as f64) / ((raw_max - raw_min) as f64);
+        }
+        else {
+            let db_vol = self.raw_to_db(raw_vol)?;
+
+            if db_max - db_min <= MilliBel::from_db(Self::MAX_LINEAR_DB_SCALE as f32) {
+                norm_vol = (db_vol - db_min) / (db_max - db_min);
+            }
+            else {
+                norm_vol = 10.0_f64.powf((db_vol - db_max).0 as f64 / 6000.0);
+
+                if db_min.0 != Self::SND_CTL_TLV_DB_GAIN_MUTE {
+                    let norm_min = 10.0_f64.powf((db_min - db_max).0 as f64 / 6000.0);
+                    norm_vol = (norm_vol - norm_min) / (1.0 - norm_min);
+                }
+            }
         }
 
-        let db_vol = self.raw_to_db(raw_vol);
-
-        db_vol.map_or(None, |db_vol| {
-            if db_max - db_min <= MilliBel::from_db(Self::MAX_LINEAR_DB_SCALE as f32) {
-                return Some((db_vol - db_min) / (db_max - db_min));
-            }
-
-            let mut norm_vol = 10.0_f64.powf((db_vol - db_max).0 as f64 / 6000.0);
-
-            if db_min.0 != Self::SND_CTL_TLV_DB_GAIN_MUTE {
-                let norm_min = 10.0_f64.powf((db_min - db_max).0 as f64 / 6000.0);
-                norm_vol = (norm_vol - norm_min) / (1.0 - norm_min);
-            }
-
-            Some(norm_vol)
-        })
+        Some((norm_vol / self.scale).clamp(0.0, 1.0))
     }
 
     fn norm_to_raw(&self, norm_vol: f64) -> Option<i64> {
+        let norm_vol = norm_vol * self.scale;
         let (db_min, db_max) = self.db_range;
         let (raw_min, raw_max) = self.raw_range;
 
-        if db_min >= db_max {
+        if db_min >= db_max || self.volume_mapper == MixerVolumeMapper::Linear {
             return Some(((norm_vol * ((raw_max - raw_min) as f64)) as i64) + raw_min);
         }
 
@@ -126,6 +143,10 @@ impl<'a> MixerControl<'a> {
         }
 
         let mut norm_vol = norm_vol;
+
+        if norm_vol == 0.0 {
+            return Some(raw_min);
+        }
 
         if db_min.0 != Self::SND_CTL_TLV_DB_GAIN_MUTE {
             let norm_min = 10.0_f64.powf((db_min - db_max).0 as f64 / 6000.0);
@@ -184,6 +205,8 @@ struct MixerControlDesc<'a> {
     index: u32,
     dir: MixerDirection,
     monitor: bool,
+    scale: f64,
+    volume_mapper: MixerVolumeMapper,
 }
 
 struct MixerSyncGroup<'a> {
@@ -218,7 +241,7 @@ impl<'a> MixerSyncGroup<'a> {
             println!("Volume = {}", norm_vol);
 
             for control in other_controls {
-                control.set_volume(norm_vol);
+                control.set_volume(norm_vol).expect("failed to set volume");
             }
         }
     }
@@ -227,18 +250,22 @@ impl<'a> MixerSyncGroup<'a> {
 fn main() {
     let control_descs = &[
         MixerControlDesc {
-            card_name: "hw:3",
-            name: "Master",
+            card_name: "hw:Audio",
+            name: "Main",
             index: 0,
             dir: MixerDirection::Playback,
             monitor: true,
+            scale: 0.5,
+            volume_mapper: MixerVolumeMapper::Auto,
         },
         MixerControlDesc {
-            card_name: "hw:4",
-            name: "Master",
+            card_name: "hw:UAC2Gadget",
+            name: "PCM",
             index: 0,
-            dir: MixerDirection::Playback,
+            dir: MixerDirection::Capture,
             monitor: true,
+            scale: 1.0,
+            volume_mapper: MixerVolumeMapper::Auto,
         },
     ];
 
@@ -258,6 +285,8 @@ fn main() {
                 c.index,
                 c.dir,
                 c.monitor,
+                c.scale,
+                c.volume_mapper,
             )
         })
         .collect();
