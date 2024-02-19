@@ -1,0 +1,8 @@
+- card_name: hw:Audio
+  name: Main
+  scale: 0.5
+
+- card_name: hw:UAC2Gadget
+  name: PCM
+  dir: Capture
+  scale: 1.0

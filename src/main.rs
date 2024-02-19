@@ -1,15 +1,26 @@
 use alsa::mixer::MilliBel;
+use clap::Parser;
 use itertools::{Either, Itertools};
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::{collections::HashMap, path::PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Parser)]
+#[command(version, about)]
+struct CliArgs {
+    /// Path to the config file
+    config: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 enum MixerDirection {
+    #[default]
     Playback,
     Capture,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 enum MixerVolumeMapper {
+    #[default]
     Auto,
     Linear,
 }
@@ -197,14 +208,28 @@ impl<'a> MixerControl<'a> {
     }
 }
 
-#[derive(Debug)]
-struct MixerControlDesc<'a> {
-    card_name: &'a str,
-    name: &'a str,
+fn bool_true() -> bool {
+    true
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+
+#[derive(Debug, Deserialize)]
+struct MixerControlDesc {
+    card_name: String,
+    name: String,
+    #[serde(default)]
     index: u32,
+    #[serde(default)]
     dir: MixerDirection,
+    #[serde(default = "bool_true")]
     monitor: bool,
+    #[serde(default = "one")]
     scale: f64,
+    #[serde(default)]
     volume_mapper: MixerVolumeMapper,
 }
 
@@ -247,28 +272,20 @@ impl<'a> MixerSyncGroup<'a> {
 }
 
 fn main() {
-    let control_descs = &[
-        MixerControlDesc {
-            card_name: "hw:Audio",
-            name: "Main",
-            index: 0,
-            dir: MixerDirection::Playback,
-            monitor: true,
-            scale: 0.5,
-            volume_mapper: MixerVolumeMapper::Auto,
-        },
-        MixerControlDesc {
-            card_name: "hw:UAC2Gadget",
-            name: "PCM",
-            index: 0,
-            dir: MixerDirection::Capture,
-            monitor: true,
-            scale: 1.0,
-            volume_mapper: MixerVolumeMapper::Auto,
-        },
-    ];
+    let cli = CliArgs::parse();
 
-    let card_names: Vec<&str> = control_descs.iter().map(|c| c.card_name).unique().collect();
+    let conf = std::fs::File::open(cli.config).expect("Failed to load config file");
+
+    let control_descs: Vec<MixerControlDesc> =
+        serde_yaml::from_reader(&conf).expect("Failed to parser config file");
+    
+    println!("Using config: \n{control_descs:#?}");
+
+    let card_names: Vec<&str> = control_descs
+        .iter()
+        .map(|c| &c.card_name[..])
+        .unique()
+        .collect();
 
     let mixers: HashMap<&str, alsa::Mixer> = card_names
         .iter()
@@ -279,8 +296,8 @@ fn main() {
         .iter()
         .map(|c| {
             MixerControl::new(
-                mixers.get(c.card_name).unwrap(),
-                c.name,
+                mixers.get(&c.card_name[..]).unwrap(),
+                &c.name,
                 c.index,
                 c.dir,
                 c.monitor,
