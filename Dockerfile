@@ -1,4 +1,4 @@
-FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf
+FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:edge
 
 RUN apt-get update
 RUN dpkg --add-architecture armhf && \

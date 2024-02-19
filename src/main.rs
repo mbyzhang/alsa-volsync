@@ -90,8 +90,8 @@ impl<'a> MixerControl<'a> {
 
     fn db_to_raw(&self, db_vol: MilliBel) -> Option<i64> {
         match self.dir {
-            MixerDirection::Playback => self.selem.ask_playback_db_vol(db_vol),
-            MixerDirection::Capture => self.selem.ask_capture_db_vol(db_vol),
+            MixerDirection::Playback => self.selem.ask_playback_db_vol(db_vol, alsa::Round::Floor),
+            MixerDirection::Capture => self.selem.ask_capture_db_vol(db_vol, alsa::Round::Floor),
         }
         .ok()
     }
@@ -100,7 +100,7 @@ impl<'a> MixerControl<'a> {
         let (db_min, db_max) = self.db_range;
         let (raw_min, raw_max) = self.raw_range;
 
-        let mut norm_vol: f64 = 0.0;
+        let mut norm_vol;
 
         if db_min >= db_max || self.volume_mapper == MixerVolumeMapper::Linear {
             if raw_min == raw_max {
@@ -108,14 +108,12 @@ impl<'a> MixerControl<'a> {
             }
 
             norm_vol = ((raw_vol - raw_min) as f64) / ((raw_max - raw_min) as f64);
-        }
-        else {
+        } else {
             let db_vol = self.raw_to_db(raw_vol)?;
 
             if db_max - db_min <= MilliBel::from_db(Self::MAX_LINEAR_DB_SCALE as f32) {
-                norm_vol = (db_vol - db_min) / (db_max - db_min);
-            }
-            else {
+                norm_vol = (db_vol.0 - db_min.0) as f64 / (db_max.0 - db_min.0) as f64;
+            } else {
                 norm_vol = 10.0_f64.powf((db_vol - db_max).0 as f64 / 6000.0);
 
                 if db_min.0 != Self::SND_CTL_TLV_DB_GAIN_MUTE {
@@ -157,6 +155,7 @@ impl<'a> MixerControl<'a> {
         self.db_to_raw(MilliBel(db_vol))
     }
 
+    #[allow(dead_code)]
     fn get_volume(&mut self) -> Option<f64> {
         let raw_vol = self.get_volume_raw();
         self.raw_to_norm(raw_vol)
